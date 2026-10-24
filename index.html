@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <title>Sand Restore</title>
-  <meta name="description" content="A relaxing sand puzzle. Tap the boxes, pour the sand, bring the picture back.">
+  <meta name="description" content="A relaxing sand puzzle. Slide the blocks under the picture and scoop up all the sand.">
   <meta name="theme-color" content="#1c1630">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,7 +16,7 @@
   <main id="app">
     <section id="menu">
       <h1>Sand Restore</h1>
-      <p class="sub">Tap a box with nothing above it. Its sand pours into the picture. Empty them all.</p>
+      <p class="sub">A picture made of sand. Slide blocks to the glowing row under it: each block scoops up sand of its own colour from the bottom of the picture. Clear it all.</p>
       <button id="cont" class="big">Continue</button>
       <div id="grid"></div>
       <p class="foot">Levels go on forever after the first 30. Progress is saved on this device.</p>
@@ -29,6 +29,7 @@
       </header>
       <div id="bar"><i></i></div>
       <div id="stage"><canvas id="img"></canvas></div>
+      <p id="hint">Drag a block up to the glowing row. It scoops sand of its colour from the bottom of the picture. Tap a block to send it up or back down.</p>
       <div id="tray"></div>
       <div id="done" hidden>
         <div class="card">

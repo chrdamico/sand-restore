@@ -524,70 +524,127 @@ export function levelImage(i) {
   return out;
 }
 
-// ---------- sand boxes ----------
+// ---------- blocks ----------
+import { solve } from './sim.js';
 
-export function buildLevel(i) {
-  const { name, pal, px } = levelImage(i);
-  const R = rng(5000 + i * 31);
-  const ncol = pal.length - 1;
-  const counts = new Array(ncol + 1).fill(0);
-  for (const v of px) if (v) counts[v]++;
+export const COLS = 8;
+// sand grid is G x G (a multiple of COLS): coarse for early levels and the busy mandalas
+const grainFor = (i, name) => (i < 12 || name === 'Mandala' ? 16 : 24);
+
+const BG_CANDIDATES = ['#7d8fd0', '#9fb0e0', '#566399', '#c9d3f0', '#6b7fb8'];
+const hexRgb = (h) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+
+function pickBg(pal) {
+  const rgb = pal.filter(Boolean).map(hexRgb);
+  let best = BG_CANDIDATES[0], bd = -1;
+  for (const c of BG_CANDIDATES) {
+    const a = hexRgb(c);
+    const d = Math.min(...rgb.map((b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])));
+    if (d > bd) { bd = d; best = c; }
+  }
+  return best;
+}
+
+function orientations(cells) {
+  const seen = new Map();
+  let cur = cells;
+  for (let f = 0; f < 2; f++) {
+    for (let k = 0; k < 4; k++) {
+      cur = cur.map(([r, c]) => [c, -r]);
+      const mr = Math.min(...cur.map((x) => x[0])), mc = Math.min(...cur.map((x) => x[1]));
+      const n = cur.map(([r, c]) => [r - mr, c - mc]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      seen.set(JSON.stringify(n), n);
+    }
+    cur = cur.map(([r, c]) => [r, -c]);
+  }
+  return [...seen.values()];
+}
+
+const SHAPES = {
+  1: orientations([[0, 0]]),
+  2: orientations([[0, 0], [0, 1]]),
+  3: [...orientations([[0, 0], [0, 1], [0, 2]]), ...orientations([[0, 0], [1, 0], [1, 1]])],
+  4: [...orientations([[0, 0], [0, 1], [1, 0], [1, 1]]), ...orientations([[0, 0], [1, 0], [2, 0], [2, 1]]),
+    ...orientations([[0, 0], [0, 1], [0, 2], [1, 1]]), ...orientations([[0, 1], [0, 2], [1, 0], [1, 1]])],
+};
+
+function split(n, maxSize, R) {
+  const out = [];
+  while (n > 0) {
+    const s = Math.min(n, 1 + Math.floor(R() * maxSize));
+    out.push(s); n -= s;
+  }
+  return out;
+}
+
+function attemptLevel(i, img, attempt) {
+  const R = rng(5000 + i * 31 + attempt * 7919);
+  const { pal, px, counts } = img;
   const colors = [];
-  for (let k = 1; k <= ncol; k++) if (counts[k] > 0) colors.push(k);
-  const total = colors.reduce((s, k) => s + counts[k], 0);
-  const target = Math.min(22, 7 + Math.floor(i * 0.55));
-
-  const parts = [];
+  for (let k = 1; k < pal.length; k++) if (counts[k] > 0) colors.push(k);
+  const total = px.length;
+  const target = Math.min(26, 12 + Math.floor(i * 0.3));
+  const maxSize = i < 4 ? 2 : i < 10 ? 3 : 4;
+  const blocks = [];
   for (const k of colors) {
-    const b = Math.max(1, Math.min(counts[k], Math.round((target * counts[k]) / total)));
-    const w = Array.from({ length: b }, () => 0.5 + R());
-    const ws = w.reduce((a, b2) => a + b2, 0);
-    const amts = w.map((x) => Math.max(1, Math.floor((counts[k] * x) / ws)));
-    let diff = counts[k] - amts.reduce((a, b2) => a + b2, 0);
-    for (let j = 0; diff > 0; j = (j + 1) % b) { amts[j]++; diff--; }
-    for (let j = 0; diff < 0; j = (j + 1) % b) { if (amts[j] > 1) { amts[j]--; diff++; } }
-    for (const a of amts) parts.push({ color: k, amount: a });
-  }
-  const maxPart = Math.max(...parts.map((p) => p.amount));
-  const U = Math.max(1, Math.ceil(maxPart / 3.8), Math.ceil(total / (target * 1.6)));
-  for (const p of parts) {
-    const A = p.amount <= U * 0.95 ? 1 : p.amount <= U * 1.9 ? 2 : 4;
-    p.area = A;
-    p.w = A === 4 ? 2 : A === 2 ? (R() < 0.5 ? 2 : 1) : 1;
-    p.h = A / p.w;
-    p.pct = Math.min(100, Math.max(1, Math.ceil((100 * p.amount) / (A * U))));
-  }
-  // shuffle then pack
-  for (let a = parts.length - 1; a > 0; a--) { const b = Math.floor(R() * (a + 1)); [parts[a], parts[b]] = [parts[b], parts[a]]; }
-  const cols = i < 10 ? 5 : i < 20 ? 6 : 7;
-  const area = parts.reduce((s, p) => s + p.area, 0);
-  let rows = Math.ceil((area * 1.3) / cols) + 1;
-  let grid;
-  for (;;) {
-    grid = Array.from({ length: rows }, () => new Array(cols).fill(-1));
-    let ok = true;
-    parts.forEach((p, id) => {
-      if (!ok) return;
-      const fits = (r, c) => {
-        if (r + p.h > rows || c + p.w > cols) return false;
-        for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) if (grid[r + y][c + x] !== -1) return false;
-        return true;
-      };
-      let placed = false;
-      for (let pass = 0; pass < 2 && !placed; pass++) {
-        for (let r = 0; r < rows && !placed; r++) for (let c = 0; c < cols && !placed; c++) {
-          if (!fits(r, c)) continue;
-          if (pass === 0 && R() < 0.14) continue;
-          for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) grid[r + y][c + x] = id;
-          p.r = r; p.c = c; placed = true;
-        }
-      }
-      if (!placed) ok = false;
+    const cells = Math.max(1, Math.round((target * counts[k]) / total));
+    const sizes = split(cells, maxSize, R);
+    const caps = sizes.map((s) => Math.max(1, Math.floor((counts[k] * s) / cells)));
+    let diff = counts[k] - caps.reduce((a, b) => a + b, 0);
+    for (let j = 0; diff > 0; j = (j + 1) % caps.length) { caps[j]++; diff--; }
+    sizes.forEach((s, j) => {
+      const shapes = SHAPES[s];
+      blocks.push({ color: k, cap: caps[j], cells: shapes[Math.floor(R() * shapes.length)] });
     });
-    if (ok) break;
-    rows++;
   }
-  const usedRows = Math.max(...parts.map((p) => p.r + p.h));
-  parts.forEach((p, id) => { p.id = id; });
-  return { name, pal, px, counts, boxes: parts, cols, rows: usedRows, unit: U };
+  for (let a = blocks.length - 1; a > 0; a--) { const b = Math.floor(R() * (a + 1)); [blocks[a], blocks[b]] = [blocks[b], blocks[a]]; }
+  blocks.forEach((b, id) => { b.id = id; });
+  const area = blocks.reduce((s, b) => s + b.cells.length, 0);
+  const rows = Math.max(5, Math.ceil(area / (COLS * 0.5)) + 1 + Math.floor(attempt / 10));
+  const grid = new Array(rows * COLS).fill(false);
+  const order = [...blocks].sort((a, b) => b.cells.length - a.cells.length);
+  for (const b of order) {
+    let placed = false;
+    for (let t = 0; t < 300 && !placed; t++) {
+      const r = 1 + Math.floor(R() * (rows - 1)), c = Math.floor(R() * COLS);
+      if (b.cells.every(([dr, dc]) => r + dr < rows && c + dc < COLS && !grid[(r + dr) * COLS + c + dc])) {
+        for (const [dr, dc] of b.cells) grid[(r + dr) * COLS + c + dc] = true;
+        b.r = r; b.c = c; placed = true;
+      }
+    }
+    if (!placed) return null;
+  }
+  const lv = { name: img.name, pal, px, counts, W: Math.sqrt(px.length), H: Math.sqrt(px.length), cols: COLS, rows, blocks };
+  return solve(lv, 1) >= 0 && solve(lv, 2) >= 0 ? lv : null;
+}
+
+const levels = new Map();
+
+// -> { name, pal, px (every pixel is a grain; empty picture pixels become the background colour),
+//      W, H, cols, rows, blocks: [{id, color, cap, cells: [[dr, dc]], r, c}] }
+export function buildLevel(i) {
+  if (levels.has(i)) return levels.get(i);
+  const base = levelImage(i);
+  const pal = [...base.pal, pickBg(base.pal)];
+  const bg = pal.length - 1;
+  const G = grainFor(i, base.name);
+  const px = new Uint8Array(G * G);
+  for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+    const tally = new Map();
+    const x0 = Math.floor((x * N) / G), x1 = Math.max(x0 + 1, Math.floor(((x + 1) * N) / G));
+    const y0 = Math.floor((y * N) / G), y1 = Math.max(y0 + 1, Math.floor(((y + 1) * N) / G));
+    for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) { const v = base.px[yy * N + xx] || bg; tally.set(v, (tally.get(v) || 0) + 1); }
+    let best = bg, bc = -1;
+    for (const [v, c] of tally) if (c > bc) { bc = c; best = v; }
+    px[y * G + x] = best;
+  }
+  const counts = new Array(pal.length).fill(0);
+  for (const v of px) counts[v]++;
+  const img = { name: base.name, pal, px, counts };
+  let lv = null;
+  for (let a = 0; a < 80 && !lv; a++) lv = attemptLevel(i, img, a);
+  if (!lv) throw new Error(`no solvable layout for level ${i}`);
+  lv.moves = solve(lv, 1);
+  levels.set(i, lv);
+  return lv;
 }

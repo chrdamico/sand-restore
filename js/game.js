@@ -1,34 +1,36 @@
-import { N, buildLevel, levelImage, HAND_COUNT } from './levels.js';
+import { levelImage, buildLevel, HAND_COUNT, COLS } from './levels.js';
+import { Sim } from './sim.js';
 
 const $ = (s) => document.querySelector(s);
-const KEY = 'sandrestore.v1';
-const GAP = 4;
-const UNFILLED = [223, 227, 243];
+const KEY = 'sandrestore.v2';
+const GAP = 2;
+const AIR = [63, 72, 133];
+const STEP = 1 / 30;
 
 let save = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || { done: [] }; } catch { return { done: [] }; } })();
 const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch { /* private mode */ } };
 
 const hexRgb = (h) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
 const shade = (h, f) => '#' + hexRgb(h).map((v) => Math.max(0, Math.min(255, Math.round(v * f))).toString(16).padStart(2, '0')).join('');
-const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967295; };
 
 const imgCv = $('#img'), imgCtx = imgCv.getContext('2d');
 const fx = $('#fx'), fxCtx = fx.getContext('2d');
 const tray = $('#tray');
-const off = document.createElement('canvas'); off.width = off.height = N;
+const off = document.createElement('canvas');
 const offCtx = off.getContext('2d');
 
 let cur = null;
-let last = 0, raf = 0;
+let last = 0, raf = 0, acc = 0, cell = 40, drag = null;
 
 // ---------- menu ----------
 function nextUnplayed() { let i = 0; while (save.done.includes(i)) i++; return i; }
 
 function thumb(i) {
   const { pal, px } = levelImage(i);
-  const c = document.createElement('canvas'); c.width = c.height = N;
-  const d = c.getContext('2d').createImageData(N, N);
-  for (let k = 0; k < N * N; k++) {
+  const n = Math.sqrt(px.length);
+  const c = document.createElement('canvas'); c.width = c.height = n;
+  const d = c.getContext('2d').createImageData(n, n);
+  for (let k = 0; k < n * n; k++) {
     if (!px[k]) continue;
     const [r, g, b] = hexRgb(pal[px[k]]);
     d.data.set([r, g, b, 255], k * 4);
@@ -55,141 +57,175 @@ function showMenu() {
 function start(i) {
   cancelAnimationFrame(raf);
   const lv = buildLevel(i);
-  cur = {
-    i, lv, filled: new Uint8Array(N * N), left: 0, queues: [], boxes: [], pours: [], parts: [],
-    won: false, data: offCtx.createImageData(N, N), dirty: true,
-  };
-  const R = (() => { let s = i * 7919 + 13; return () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff); })();
-  lv.pal.forEach((_, k) => {
-    if (!k) return;
-    const idx = [];
-    lv.px.forEach((v, p) => { if (v === k) idx.push(p); });
-    idx.sort((a, b) => (Math.floor(a / N) + R() * 5) - (Math.floor(b / N) + R() * 5));
-    cur.queues[k] = idx;
-  });
-  for (let p = 0; p < N * N; p++) {
-    if (lv.px[p]) { cur.left++; paint(p, false); }
-  }
-  cur.total = cur.left;
+  const sim = new Sim(lv, i + 1);
+  cur = { i, lv, sim, rgb: lv.pal.map((h) => (h ? hexRgb(h) : AIR)), parts: [], won: false, shown: new Map(), data: null };
+  off.width = off.height = lv.W;
+  cur.data = offCtx.createImageData(lv.W, lv.H);
   $('#menu').hidden = true; $('#play').hidden = false; $('#done').hidden = true;
   imgCv.classList.remove('won');
   $('#title').innerHTML = `Level ${i + 1}<small>${lv.name}</small>`;
+  $('#hint').hidden = save.done.length >= 2;
   buildTray();
   layout();
-  updateBar();
-  last = performance.now();
+  acc = 0; last = performance.now();
   raf = requestAnimationFrame(frame);
-}
-
-function paint(p, filled) {
-  const { pal, px } = cur.lv;
-  let rgb;
-  if (filled) {
-    const base = hexRgb(pal[px[p]]);
-    const f = 0.9 + 0.2 * hash(p % N, Math.floor(p / N));
-    rgb = base.map((v) => Math.min(255, v * f));
-  } else rgb = UNFILLED;
-  cur.data.data.set([rgb[0], rgb[1], rgb[2], 255], p * 4);
-  cur.dirty = true;
 }
 
 function buildTray() {
   tray.textContent = '';
-  const { lv } = cur;
-  cur.boxes = lv.boxes.map((b) => {
+  const { lv, sim } = cur;
+  for (let r = 0; r < lv.rows; r++) for (let c = 0; c < COLS; c++) {
+    const g = document.createElement('div');
+    g.className = 'gc' + (r === 0 ? ' dock' : '');
+    g.style.cssText = `left:calc(var(--cell)*${c});top:calc(var(--cell)*${r})`;
+    tray.append(g);
+  }
+  for (const b of sim.blocks) {
     const hex = lv.pal[b.color];
     const el = document.createElement('div');
-    el.className = 'box';
-    el.style.borderColor = shade(hex, 1.15);
-    el.innerHTML = '<div class="sand"></div><span class="pct"></span>';
-    const box = { ...b, el, sand: el.firstChild, label: el.lastChild, hex, alive: true, pouring: false, left: b.amount };
-    box.sand.style.backgroundColor = hex;
-    el.addEventListener('pointerdown', (e) => { e.preventDefault(); tap(box); });
+    el.className = 'blk';
+    b.sands = [];
+    const has = (dr, dc) => b.cells.some(([r, c]) => r === dr && c === dc);
+    b.cells.forEach(([dr, dc], k) => {
+      const t = !has(dr - 1, dc), rt = !has(dr, dc + 1), bt = !has(dr + 1, dc), l = !has(dr, dc - 1);
+      const cl = document.createElement('div');
+      cl.className = 'cl';
+      cl.style.cssText = `left:calc(var(--cell)*${dc});top:calc(var(--cell)*${dr})`;
+      const inner = document.createElement('div');
+      inner.className = 'b';
+      inner.style.cssText = `top:${t ? GAP : 0}px;right:${rt ? GAP : 0}px;bottom:${bt ? GAP : 0}px;left:${l ? GAP : 0}px;` +
+        `border:3px solid ${shade(hex, 1.2)};border-width:${t ? 3 : 0}px ${rt ? 3 : 0}px ${bt ? 3 : 0}px ${l ? 3 : 0}px;` +
+        `border-radius:${t && l ? 9 : 0}px ${t && rt ? 9 : 0}px ${bt && rt ? 9 : 0}px ${bt && l ? 9 : 0}px`;
+      const sand = document.createElement('div');
+      sand.className = 's';
+      sand.style.backgroundColor = hex;
+      inner.append(sand);
+      if (k === 0) { const p = document.createElement('span'); p.className = 'p'; inner.append(p); b.label = p; }
+      cl.append(inner);
+      el.append(cl);
+      b.sands.push([sand, dr]);
+    });
+    b.hrows = Math.max(...b.cells.map((x) => x[0])) + 1;
+    b.el = el;
+    el.addEventListener('pointerdown', (e) => dragStart(b, e));
+    el.addEventListener('pointermove', dragMove);
+    el.addEventListener('pointerup', dragEnd);
+    el.addEventListener('pointercancel', dragEnd);
     tray.append(el);
-    setSand(box);
-    return box;
-  });
-  refreshFree();
-}
-
-function setSand(box) {
-  const pct = (box.pct * box.left) / box.amount;
-  box.sand.style.height = pct + '%';
-  box.label.textContent = Math.round(pct) + '%';
-}
-
-function isFree(box) {
-  if (!box.alive || box.pouring) return false;
-  for (const o of cur.boxes) {
-    if (!o.alive || o === box) continue;
-    if (o.r + o.h <= box.r && o.c < box.c + box.w && o.c + o.w > box.c) return false;
-  }
-  return true;
-}
-
-function refreshFree() {
-  for (const b of cur.boxes) {
-    if (!b.alive) continue;
-    // a box is "blocked" while anything alive sits above it; pouring boxes count as free-looking
-    let blocked = false;
-    for (const o of cur.boxes) {
-      if (!o.alive || o === b) continue;
-      if (o.r + o.h <= b.r && o.c < b.c + b.w && o.c + o.w > b.c) { blocked = true; break; }
-    }
-    b.el.classList.toggle('blocked', blocked && !b.pouring);
+    place(b);
+    showSand(b);
   }
 }
 
-function tap(box) {
-  if (!cur || cur.won) return;
-  if (!isFree(box)) {
-    if (box.alive && !box.pouring) { box.el.classList.remove('shake'); void box.el.offsetWidth; box.el.classList.add('shake'); }
-    return;
-  }
-  box.pouring = true;
-  box.el.classList.add('pouring');
-  const dur = 0.45 + box.amount / 260;
-  cur.pours.push({ box, rate: box.amount / dur, carry: 0 });
-  refreshFree();
+function place(b) {
+  b.el.style.transform = `translate(calc(var(--cell)*${b.c}),calc(var(--cell)*${b.r}))`;
 }
 
+function showSand(b) {
+  const f = b.taken / b.cap;
+  for (const [el, dr] of b.sands) el.style.height = 100 * Math.max(0, Math.min(1, f * b.hrows - (b.hrows - 1 - dr))) + '%';
+  b.label.textContent = Math.floor(f * 100) + '%';
+  b.shown = b.taken;
+}
+
+// ---------- moving blocks ----------
+function dragStart(b, e) {
+  if (!cur || cur.won || b.done) return;
+  e.preventDefault();
+  b.el.setPointerCapture(e.pointerId);
+  const tr = tray.getBoundingClientRect();
+  drag = {
+    b, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false,
+    gx: (e.clientX - tr.left) / cell - b.c, gy: (e.clientY - tr.top) / cell - b.r,
+    dist: cur.sim.reach(b),
+  };
+  $('#hint').hidden = true;
+}
+
+function dragMove(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const { b } = drag;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 8) return;
+  if (!drag.moved) { drag.moved = true; b.el.classList.add('drag'); }
+  const tr = tray.getBoundingClientRect();
+  const fc = (e.clientX - tr.left) / cell - drag.gx, fr = (e.clientY - tr.top) / cell - drag.gy;
+  const { rows } = cur.lv;
+  let best = -1, bd = Infinity;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < COLS; c++) {
+    if (drag.dist[r * COLS + c] < 0) continue;
+    const d = (r - fr) ** 2 + (c - fc) ** 2;
+    if (d < bd) { bd = d; best = r * COLS + c; }
+  }
+  if (best >= 0 && (b.r !== Math.floor(best / COLS) || b.c !== best % COLS)) {
+    b.r = Math.floor(best / COLS); b.c = best % COLS;
+    place(b);
+  }
+}
+
+function dragEnd(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const { b, moved } = drag;
+  drag = null;
+  b.el.classList.remove('drag');
+  if (!moved) tap(b);
+}
+
+// tap: send the block to the dock (nearest column), or back down if it is already there
+function tap(b) {
+  const { sim } = cur, dist = sim.reach(b);
+  let best = null;
+  const docked = b.r === 0;
+  for (let r = 0; r < sim.rows; r++) for (let c = 0; c < COLS; c++) {
+    const d = dist[r * COLS + c];
+    if (d < 0 || (docked ? r === 0 : r !== 0)) continue;
+    const k = docked ? -r * 100 + Math.abs(c - b.c) : Math.abs(c - b.c) * 100 + d;
+    if (!best || k < best.k) best = { r, c, k };
+  }
+  if (!best) { b.el.classList.remove('shake'); void b.el.offsetWidth; b.el.classList.add('shake'); return; }
+  b.r = best.r; b.c = best.c;
+  place(b);
+}
+
+// ---------- layout ----------
 function layout() {
   if (!cur) return;
+  const { lv } = cur;
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
-  const W = Math.min(window.innerWidth, 560) - 24, H = window.innerHeight;
-  const side = Math.floor(Math.min(W, H * 0.4));
-  const px = N * Math.max(1, Math.round((side * dpr) / N));
-  imgCv.width = imgCv.height = px;
+  const W = Math.min(window.innerWidth, 560) - 24;
+  const top = $('#stage').getBoundingClientRect().top;
+  const sab = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sab')) || 0;
+  const avail = window.innerHeight - top - 22 - sab;
+  cell = Math.max(26, Math.floor(Math.min(W / COLS, avail / (COLS + lv.rows))));
+  const side = cell * COLS;
+  const k = Math.max(1, Math.round((side * dpr) / lv.W));
+  imgCv.width = imgCv.height = lv.W * k;
   imgCv.style.width = imgCv.style.height = side + 'px';
-  cur.dirty = true;
+  tray.style.setProperty('--cell', cell + 'px');
+  tray.style.width = side + 'px';
+  tray.style.height = lv.rows * cell + 'px';
+  for (const b of cur.sim.blocks) b.label.style.fontSize = Math.max(10, Math.min(14, cell * 0.25)) + 'px';
   fx.width = window.innerWidth * dpr; fx.height = window.innerHeight * dpr;
   fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cur.sim.dirty = true;
+}
 
-  const top = tray.getBoundingClientRect().top;
-  const avail = Math.max(120, H - top - 12 - (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sab')) || 0));
-  const { cols, rows } = cur.lv;
-  const cell = Math.max(34, Math.floor(Math.min(W / cols, avail / rows)));
-  tray.style.width = cell * cols + 'px';
-  tray.style.height = Math.min(avail, cell * rows) + 'px';
-  for (const b of cur.boxes) {
-    const s = b.el.style;
-    s.left = b.c * cell + GAP / 2 + 'px';
-    s.top = b.r * cell + GAP / 2 + 'px';
-    s.width = b.w * cell - GAP + 'px';
-    s.height = b.h * cell - GAP + 'px';
-    b.label.style.fontSize = Math.max(10, Math.min(15, cell * 0.22)) + 'px';
+// ---------- loop ----------
+function drawPicture() {
+  const { sim, rgb, data, lv } = cur;
+  for (let p = 0; p < sim.g.length; p++) {
+    const v = sim.g[p];
+    const c = rgb[v];
+    const f = v ? 0.9 + (0.2 * sim.sh[p]) / 255 : 1;
+    data.data[p * 4] = Math.min(255, c[0] * f);
+    data.data[p * 4 + 1] = Math.min(255, c[1] * f);
+    data.data[p * 4 + 2] = Math.min(255, c[2] * f);
+    data.data[p * 4 + 3] = 255;
   }
-}
-
-function updateBar() {
-  $('#bar i').style.width = (100 * (cur.total - cur.left)) / cur.total + '%';
-}
-
-function arrive(p) {
-  cur.filled[p.idx] = 1;
-  paint(p.idx, true);
-  cur.left--;
-  if (cur.left === 0) win();
+  offCtx.putImageData(data, 0, 0);
+  imgCtx.imageSmoothingEnabled = false;
+  imgCtx.drawImage(off, 0, 0, imgCv.width, imgCv.height);
+  $('#bar i').style.width = (100 * (sim.total - sim.left)) / sim.total + '%';
+  sim.dirty = false;
 }
 
 function win() {
@@ -207,58 +243,38 @@ function win() {
 function frame(now) {
   raf = requestAnimationFrame(frame);
   if (!cur) return;
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const { sim } = cur;
+  acc = Math.min(acc + (now - last) / 1000, 0.2);
   last = now;
-  const ir = imgCv.getBoundingClientRect();
-  const cell = ir.width / N;
+  while (acc >= STEP) { acc -= STEP; if (!cur.won) sim.step(); }
 
-  // emit grains from pouring boxes
-  for (let k = cur.pours.length - 1; k >= 0; k--) {
-    const po = cur.pours[k], b = po.box;
-    po.carry += po.rate * dt;
-    let n = Math.floor(po.carry);
-    po.carry -= n;
-    n = Math.min(n, b.left);
-    const br = b.el.getBoundingClientRect();
-    const q = cur.queues[b.color];
-    for (let g = 0; g < n; g++) {
-      const idx = q.pop();
-      if (idx === undefined) break;
-      const tx = ir.left + ((idx % N) + 0.5) * cell, ty = ir.top + (Math.floor(idx / N) + 0.5) * cell;
-      cur.parts.push({
-        x0: br.left + br.width * (0.2 + 0.6 * Math.random()), y0: br.top + 4,
-        x1: tx, y1: ty, t: 0, life: 0.45 + Math.random() * 0.25, idx, color: b.hex,
-      });
-    }
-    b.left -= n;
-    setSand(b);
-    if (b.left <= 0) {
-      b.alive = false; b.pouring = false;
-      b.el.classList.remove('pouring'); b.el.classList.add('gone');
-      cur.pours.splice(k, 1);
-      refreshFree();
+  const ir = imgCv.getBoundingClientRect(), tr = tray.getBoundingClientRect();
+  const gpx = ir.width / sim.W;
+  for (const ev of sim.events.splice(0)) {
+    if (cur.parts.length > 500) continue;
+    cur.parts.push({
+      x0: ir.left + (ev.x + 0.5) * gpx, y0: ir.bottom - gpx * 0.5,
+      x1: tr.left + (ev.cell + 0.5) * cell, y1: tr.top + cell * 0.55, t: 0, color: cur.lv.pal[ev.color],
+    });
+  }
+  for (const b of sim.blocks) {
+    if (b.shown !== b.taken) showSand(b);
+    if (b.done && !b.gone) {
+      b.gone = true;
+      if (drag && drag.b === b) drag = null;
+      setTimeout(() => { b.el.classList.add('gone'); setTimeout(() => b.el.remove(), 350); }, 250);
     }
   }
-
-  // move grains
   fxCtx.clearRect(0, 0, fx.width, fx.height);
   for (let k = cur.parts.length - 1; k >= 0; k--) {
     const p = cur.parts[k];
-    p.t += dt / p.life;
-    if (p.t >= 1) { arrive(p); cur.parts.splice(k, 1); continue; }
-    const e = 1 - (1 - p.t) * (1 - p.t);
-    const x = p.x0 + (p.x1 - p.x0) * e, y = p.y0 + (p.y1 - p.y0) * e;
+    p.t += (now - (p.last || now)) / 1000 / 0.2; p.last = now;
+    if (p.t >= 1) { cur.parts.splice(k, 1); continue; }
     fxCtx.fillStyle = p.color;
-    fxCtx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    fxCtx.fillRect(p.x0 + (p.x1 - p.x0) * p.t - 2, p.y0 + (p.y1 - p.y0) * p.t * p.t - 2, 4, 4);
   }
-  if (cur.dirty) {
-    offCtx.putImageData(cur.data, 0, 0);
-    imgCtx.imageSmoothingEnabled = false;
-    imgCtx.clearRect(0, 0, imgCv.width, imgCv.height);
-    imgCtx.drawImage(off, 0, 0, imgCv.width, imgCv.height);
-    cur.dirty = false;
-    updateBar();
-  }
+  if (sim.dirty) drawPicture();
+  if (!cur.won && sim.left === 0) win();
 }
 
 // ---------- wiring ----------
