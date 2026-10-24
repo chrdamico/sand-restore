@@ -1,1 +1,1 @@
-{ "name": "sand-restore", "private": true, "type": "module", "scripts": { "test": "node --test test/", "serve": "python3 -m http.server 8080" } }
+{ "name": "sand-restore", "private": true, "type": "module", "scripts": { "test": "node --test", "serve": "python3 -m http.server 8080" } }
