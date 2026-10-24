@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Sand Restore</title>
+  <meta name="description" content="A relaxing sand puzzle. Tap the boxes, pour the sand, bring the picture back.">
+  <meta name="theme-color" content="#1c1630">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Sand Restore">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Crect width='8' height='8' fill='%231c1630'/%3E%3Crect x='1' y='1' width='3' height='3' fill='%23f2b632'/%3E%3Crect x='4' y='1' width='3' height='3' fill='%232f63d9'/%3E%3Crect x='1' y='4' width='3' height='3' fill='%23c8372d'/%3E%3Crect x='4' y='4' width='3' height='3' fill='%233bb273'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app">
+    <section id="menu">
+      <h1>Sand Restore</h1>
+      <p class="sub">Tap a box with nothing above it. Its sand pours into the picture. Empty them all.</p>
+      <button id="cont" class="big">Continue</button>
+      <div id="grid"></div>
+      <p class="foot">Levels go on forever after the first 30. Progress is saved on this device.</p>
+    </section>
+    <section id="play" hidden>
+      <header>
+        <button id="back" aria-label="Menu">&#9776;</button>
+        <div id="title"></div>
+        <button id="retry" aria-label="Restart level">&#8635;</button>
+      </header>
+      <div id="bar"><i></i></div>
+      <div id="stage"><canvas id="img"></canvas></div>
+      <div id="tray"></div>
+      <div id="done" hidden>
+        <div class="card">
+          <h2>Restored!</h2>
+          <p id="donename"></p>
+          <button id="next" class="big">Next level</button>
+          <button id="tomenu">Menu</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <canvas id="fx"></canvas>
+  <script type="module" src="js/game.js"></script>
+</body>
+</html>
